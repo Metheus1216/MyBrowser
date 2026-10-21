@@ -1,3 +1,5 @@
+const net = require("net")
+
 class URLparser {
   constructor(url) {
     // 1.截取 "://" 第一次在url中出现的位置索引
@@ -35,12 +37,70 @@ class URLparser {
   }
 }
 
-try {
-  const parsed = new URLparser("http://example.org/index.html");
-  console.log("success")
-  console.log("Scheme:", parsed.scheme);
-  console.log("Host:", parsed.host);
-  console.log("Path:", parsed.path);
-} catch (e) {
-  console.log("fail", e.message);
+// 创建请求连接
+function load(url) {
+  const URL = new URLparser(url);
+  let port = 80;
+
+  // 创建套接字socket发起连接
+  // 相当于创建一个 net.Socket 对象，返回的正是 net.Socket 实例，代表了客户端与服务端之间的第一条TCP连接
+  const client = net.createConnection(port, URL.host, () => {
+
+    console.log("客户端成功发起请求");
+
+    let reqString = `GET ${URL.path} HTTP/1.1\r\n`;
+    reqString += `Host: ${URL.host}\r\n`;
+    reqString += `Connection: close\r\n`;
+    reqString += `\r\n`;
+
+    // 发送数据API
+    client.write(reqString);
+  })
+
+  // 接收服务端请求
+  let resData = "";
+
+  // 监听数据流
+  client.on("data", (chunk) => {
+    resData += chunk.toString();
+  })
+
+  // TCP连接完全关闭
+  client.on("close", () => {
+    console.log("响应结束\n");
+    console.log(resData);
+  })
+
+  // TCP连接半关闭状态，此时发送了FIN状态码
+  client.on("end", () => {
+    console.log("响应接收完毕");
+    const parts = resData.split("\r\n\r\n");
+    const header = parts[0];
+    // slice切去header，join合成字符串
+    const body = parts.slice(1).join("\r\n\r\n");
+
+    if (body) {
+      HTMLparser(body);
+    } else {
+      console.log("Body is missed.");
+    }
+  })
 }
+
+function HTMLparser(body) {
+  let inTag = false;
+  let textContent = "";
+  for (let t of body) {
+    if (t == "<") {
+      inTag = true;
+    } else if (t == ">") {
+      inTag = false;
+    } else if (!inTag) {
+      textContent += t;
+    }
+  }
+  console.log("HTML的纯文本内容：\n");
+  console.log(textContent.trim());
+}
+
+load("http://example.org/index.html");
