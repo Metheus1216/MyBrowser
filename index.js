@@ -1,25 +1,36 @@
 const net = require("net");
 const tls = require("tls");
+const fs = require("fs");
 
 class URLparser {
   constructor(url) {
-    // 1.截取 "://" 第一次在url中出现的位置索引
-    // (indexOf()是返回括号内参数第一次出现的索引位置)
-    const schemeEnd = url.indexOf("://")
-    if (schemeEnd == -1) {
-      throw new Error("Invalid URL");
+    // 1. 截取 "://" 第一次在 url 中出现的位置索引
+    const schemeEnd = url.indexOf("://");
+    if (schemeEnd === -1) {
+      // data: 是没有 :// 的
+      if (url.startsWith("data:")) {
+        this.scheme = "data";
+        this.path = url.substring(5);
+        return;
+      }
+      throw new Error("Invalid URL: " + url);
     }
 
-    // 2.分割字符串，获取协议名
+    // 2. 分割字符串，获取协议名
     this.scheme = url.substring(0, schemeEnd);
 
-    // 3.提取域名及剩下的部分
+    // 3. 提取域名及剩下的部分
     let rest = url.substring(schemeEnd + 3);
 
-    // 4.检查协议是否在可被允许访问范围内
+    // 4. 检查协议是否在可被允许访问范围内
+    if (this.scheme === "file") {
+      // 去掉开头的 "/"（file:///D:/... 会多出一个 "/"）
+      this.path = rest.replace(/^\//, "");
+      return;
+    }
     URLparser.SchemeChecker(this.scheme, URLparser.ALLOWED_SCHEMES);
 
-    // 5.检查 "/" 分离 Host 和 Path
+    // 5. 检查 "/" 分离 Host 和 Path
     if (!rest.includes("/")) {
       rest += "/";
     }
@@ -27,10 +38,10 @@ class URLparser {
     this.host = rest.substring(0, pathStart);
     this.path = rest.substring(pathStart);
   }
-  // 声明可被允许访问的协议数组
-  static ALLOWED_SCHEMES = ['http', 'https'];
 
-  // allowedSchemes是数组类型
+  // 声明可被允许访问的协议数组
+  static ALLOWED_SCHEMES = ["http", "https", "file"];
+
   static SchemeChecker(currentScheme, allowedSchemes) {
     if (!allowedSchemes.includes(currentScheme)) {
       throw new Error(`This scheme '${currentScheme}' is not allowed.`);
@@ -38,82 +49,141 @@ class URLparser {
   }
 }
 
-// 创建请求连接
 function load(url) {
+  if (!url) {
+    console.log("无 URL 输入");
+    url = "file:///./test.html";
+  }
+
   const URL = new URLparser(url);
-  let client;
+
+  // 处理 data: 协议
+  if (URL.scheme === "data") {
+    const parts = URL.path.split(",");
+    const mime = parts[0];
+    const body = parts.slice(1).join(",");
+    console.log("读取 data: URL 成功 (" + mime + ")");
+    console.log(body);
+    return;
+  }
+
+  // 处理 file: 协议 —— 这里只负责读取本地文件并解析其内容
+  if (URL.scheme === "file") {
+    try {
+      const body = fs.readFileSync(URL.path, "utf-8");
+      console.log("读取本地 file 成功: " + URL.path);
+      // 本地文件内容当作 HTML 解析显示，而不是再次当作 URL 加载
+      displayHTML(body);
+    } catch (e) {
+      console.error("读取本地 file 失败:", e.message);
+    }
+    return;
+  }
+
+  // 处理 http / https 协议
   const port = URL.scheme === "https" ? 443 : 80;
 
-  // 1. 封装统一发送请求逻辑
-  const sendRequest = () => {
-      let requestStr = `GET ${URL.path} HTTP/1.1\r\n`;
-      requestStr += `Host: ${URL.host}\r\n`;
-      requestStr += `Connection: close\r\n\r\n`;
-
-      console.log(`连接已建立，走的是 ${URL.scheme}://${URL.host}${URL.path} `);
-      console.log(`正在请求: ${url}`);
-      client.write(requestStr);
+  const headers = {
+    "Host": URL.host,
+    "Connection": "close",
+    "User-Agent": "netclient/1.0",
   };
-  // 2. 根据协议创建连接，并绑定对应的事件
-  // 创建套接字socket发起连接
-  // net.createConnection()相当于创建一个 net.Socket 对象，返回的正是 net.Socket 实例，代表了客户端与服务端之间的第一条TCP连接
-  if (URL.scheme == "http") {
-    // 这里判断为 HTTP ，那么回调函数就实际上对应的是 client.on("connect", ...);
-    client = net.createConnection(port, URL.host, sendRequest);
-  } else if (URL.scheme == "https") {
-    // 判断为 HTTPS ,回调函数对应的是 client.on("secureConnect", ...);
-    client = tls.connect({
-      host: URL.host,
-      port: port,
-      servername: URL.host
-    }, sendRequest);
-  }
-  // 实际上这个判断逻辑加上回调函数就自动根据协议监听对应的事件了
 
-  // 接收服务端请求
+  const sendRequest = () => {
+    let requestStr = `GET ${URL.path} HTTP/1.1\r\n`;
+    for (const [key, value] of Object.entries(headers)) {
+      requestStr += `${key}: ${value}\r\n`;
+    }
+    requestStr += `\r\n`;
+    console.log(`正在请求: ${url}`);
+    client.write(requestStr);
+  };
+
+  const client =
+    URL.scheme === "https"
+      ? tls.connect({ host: URL.host, port, servername: URL.host }, sendRequest)
+      : net.createConnection(port, URL.host, sendRequest);
+
   let resData = "";
 
-  // 监听数据流
   client.on("data", (chunk) => {
     resData += chunk.toString();
-  })
+  });
 
-  // TCP连接完全关闭
-  client.on("close", () => {
-    console.log("响应结束\n");
-    console.log(resData);
-  })
+  client.on("connect", () => {});
 
-  // TCP连接半关闭状态，此时发送了FIN状态码
+  client.on("error", (err) => {
+    console.error("连接失败:", err.message);
+  });
+
   client.on("end", () => {
     console.log("响应接收完毕");
     const parts = resData.split("\r\n\r\n");
-    const header = parts[0];
-    // slice切去header，join合成字符串
     const body = parts.slice(1).join("\r\n\r\n");
 
     if (body) {
-      HTMLparser(body);
+      displayHTML(body);
     } else {
       console.log("Body is missed.");
     }
-  })
+  });
+
+  client.on("close", () => {
+    console.log("响应结束");
+  });
 }
 
-function HTMLparser(body) {
+function displayHTML(source) {
   let inTag = false;
+  let inComment = false;
+  let inScript = false;
   let textContent = "";
-  for (let t of body) {
-    if (t == "<") {
-      inTag = true;
-    } else if (t == ">") {
+
+  // 仅针对 <body>…</body> 之间的内容提取纯文本
+  const bodyMatch = source.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const target = bodyMatch ? bodyMatch[1] : source;
+
+  for (let i = 0; i < target.length; i++) {
+    const t = target[i];
+
+    if (inScript) {
+      if (target.startsWith("</script", i)) {
+        inScript = false;
+        inTag = true;
+        i += "</script".length - 1;
+      }
+      continue;
+    }
+
+    if (inComment) {
+      if (target.startsWith("-->", i)) {
+        inComment = false;
+        i += 2;
+      }
+      continue;
+    }
+
+    if (t === "<") {
+      if (target.startsWith("<!--", i)) {
+        inComment = true;
+        i += 3;
+      } else if (/^<script\b/i.test(target.slice(i, i + 8))) {
+        inScript = true;
+        inTag = true;
+      } else {
+        inTag = true;
+      }
+    } else if (t === ">") {
       inTag = false;
     } else if (!inTag) {
       textContent += t;
     }
   }
-  console.log("HTML的纯文本内容：\n");
+
+  console.log("HTML 的纯文本内容：\n");
   console.log(textContent.trim());
 }
 
-load("https://example.org/index.html");
+
+const target = process.argv[2] || "file:///./test.html";
+load(target);
