@@ -1,4 +1,5 @@
-const net = require("net")
+const net = require("net");
+const tls = require("tls");
 
 class URLparser {
   constructor(url) {
@@ -40,22 +41,34 @@ class URLparser {
 // 创建请求连接
 function load(url) {
   const URL = new URLparser(url);
-  let port = 80;
+  let client;
+  const port = URL.scheme === "https" ? 443 : 80;
 
+  // 1. 封装统一发送请求逻辑
+  const sendRequest = () => {
+      let requestStr = `GET ${URL.path} HTTP/1.1\r\n`;
+      requestStr += `Host: ${URL.host}\r\n`;
+      requestStr += `Connection: close\r\n\r\n`;
+
+      console.log(`连接已建立，走的是 ${URL.scheme}://${URL.host}${URL.path} `);
+      console.log(`正在请求: ${url}`);
+      client.write(requestStr);
+  };
+  // 2. 根据协议创建连接，并绑定对应的事件
   // 创建套接字socket发起连接
-  // 相当于创建一个 net.Socket 对象，返回的正是 net.Socket 实例，代表了客户端与服务端之间的第一条TCP连接
-  const client = net.createConnection(port, URL.host, () => {
-
-    console.log("客户端成功发起请求");
-
-    let reqString = `GET ${URL.path} HTTP/1.1\r\n`;
-    reqString += `Host: ${URL.host}\r\n`;
-    reqString += `Connection: close\r\n`;
-    reqString += `\r\n`;
-
-    // 发送数据API
-    client.write(reqString);
-  })
+  // net.createConnection()相当于创建一个 net.Socket 对象，返回的正是 net.Socket 实例，代表了客户端与服务端之间的第一条TCP连接
+  if (URL.scheme == "http") {
+    // 这里判断为 HTTP ，那么回调函数就实际上对应的是 client.on("connect", ...);
+    client = net.createConnection(port, URL.host, sendRequest);
+  } else if (URL.scheme == "https") {
+    // 判断为 HTTPS ,回调函数对应的是 client.on("secureConnect", ...);
+    client = tls.connect({
+      host: URL.host,
+      port: port,
+      servername: URL.host
+    }, sendRequest);
+  }
+  // 实际上这个判断逻辑加上回调函数就自动根据协议监听对应的事件了
 
   // 接收服务端请求
   let resData = "";
@@ -103,4 +116,4 @@ function HTMLparser(body) {
   console.log(textContent.trim());
 }
 
-load("http://example.org/index.html");
+load("https://example.org/index.html");
