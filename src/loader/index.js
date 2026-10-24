@@ -2,7 +2,7 @@
 const { render } = require("../renderer/index");
 const { URLparser } = require("../URLparser/URLparser");
 const { file_loader } = require("./scheme_loader/file_loader");
-const { data_loader } = require("./scheme_loader/data_loadeer");
+const { data_loader } = require("./scheme_loader/data_loader");
 const { http_loader } = require("./scheme_loader/http_loader");
 
 function load(url) {
